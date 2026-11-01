@@ -1,0 +1,82 @@
+name: Build MSRAG (x86_64 + aarch64, bin + so)
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  # ---------- x86_64 原生 ----------
+  build-x86_64:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libsdl2-dev libsdl2-ttf-dev \
+            libfreetype6-dev libharfbuzz-dev zlib1g-dev libpng-dev
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j$(nproc)
+      - name: Install to dist-x86_64
+        run: cmake --install build --prefix dist-x86_64
+      - name: Package x86_64
+        run: |
+          tar -czvf msrag-x86_64.tar.gz -C dist-x86_64 .
+          mkdir -p dist-x86_64-bin && cp dist-x86_64/msrag dist-x86_64-bin/
+          tar -czvf msrag-x86_64-bin-static.tar.gz -C dist-x86_64-bin .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msrag-x86_64
+          path: |
+            msrag-x86_64.tar.gz
+            msrag-x86_64-bin-static.tar.gz
+
+  # ---------- aarch64 交叉编译（Termux 原生） ----------
+  build-aarch64:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
+            wget xz-utils
+      - name: Build aarch64 dependencies (SDL2, SDL2_ttf, freetype...)
+        run: |
+          mkdir -p /workspace
+          cp -r ${{ github.workspace }}/* /workspace/ 2>/dev/null || true
+          cd /workspace
+          bash .github/scripts/build-aarch64-deps.sh
+      - name: Configure MSRAG for aarch64
+        run: |
+          cmake -S . -B build-aarch64 \
+            -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake/aarch64-linux-gnu.cmake \
+            -DCMAKE_PREFIX_PATH=/opt/aarch64-deps \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build-aarch64 -j$(nproc)
+      - name: Install bin + so
+        run: cmake --install build-aarch64 --prefix dist-aarch64
+      - name: Bundle aarch64 SDL2 .so into dynamic package
+        run: |
+          # 将交叉编译的 SDL2 / SDL2_ttf 动态库复制到 dist-aarch64
+          cp -a /opt/aarch64-deps/lib/libSDL2*.so* dist-aarch64/ 2>/dev/null || true
+          cp -a /opt/aarch64-deps/lib/libSDL2_ttf*.so* dist-aarch64/ 2>/dev/null || true
+          # 如果 SDL2_ttf 静态链接了 freetype，则不需要 freetype .so；
+          # 若存在，一并复制
+          cp -a /opt/aarch64-deps/lib/libfreetype*.so* dist-aarch64/ 2>/dev/null || true
+      - name: Package aarch64
+        run: |
+          tar -czvf msrag-aarch64.tar.gz -C dist-aarch64 .
+          mkdir -p dist-aarch64-bin && cp dist-aarch64/msrag dist-aarch64-bin/
+          tar -czvf msrag-aarch64-bin-static.tar.gz -C dist-aarch64-bin .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: msrag-aarch64
+          path: |
+            msrag-aarch64.tar.gz
+            msrag-aarch64-bin-static.tar.gz
