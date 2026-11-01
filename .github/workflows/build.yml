@@ -6,7 +6,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ---------------- x86_64 ----------------
   build-x86_64:
     runs-on: ubuntu-22.04
     steps:
@@ -23,7 +22,7 @@ jobs:
         run: |
           mkdir -p assets
           if [ ! -s assets/NotoSansCJKsc-Regular.otf ]; then
-            wget -q -O assets/NotoSansCJKsc-Regular.otf \
+            curl -fL --retry 3 -o assets/NotoSansCJKsc-Regular.otf \
               https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf
           fi
           ls -lh assets/
@@ -52,9 +51,7 @@ jobs:
         run: |
           tar -czvf msrag-x86_64.tar.gz -C dist-x86_64 .
           mkdir -p dist-x86_64-bin
-          cp dist-x86_64/msrag dist-x86_64/libSDL2*.so* dist-x86_64/libmsrag.so \
-             dist-x86_64/libfreetype*.so* dist-x86_64/libpng*.so* dist-x86_64/libz*.so* \
-             dist-x86_64-bin/ 2>/dev/null || true
+          cp dist-x86_64/msrag dist-x86_64/lib*.so* dist-x86_64-bin/ 2>/dev/null || true
           tar -czvf msrag-x86_64-bin.tar.gz -C dist-x86_64-bin .
 
       - uses: actions/upload-artifact@v4
@@ -64,7 +61,6 @@ jobs:
             msrag-x86_64.tar.gz
             msrag-x86_64-bin.tar.gz
 
-  # ---------------- aarch64 ----------------
   build-aarch64:
     runs-on: ubuntu-22.04
     steps:
@@ -74,32 +70,36 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake build-essential pkg-config \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget xz-utils
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget curl xz-utils
 
       - name: Build aarch64 dependencies
         env:
           DEPS_PREFIX: ${{ runner.temp }}/aarch64-deps
         run: |
           echo "DEPS_PREFIX=$DEPS_PREFIX" >> $GITHUB_ENV
+          mkdir -p "$DEPS_PREFIX"
+          sudo chown -R $(id -u):$(id -g) "$DEPS_PREFIX"
           bash .github/scripts/build-aarch64-deps.sh "${{ github.workspace }}"
 
       - name: Fetch full CJK font
         run: |
           mkdir -p assets
           if [ ! -s assets/NotoSansCJKsc-Regular.otf ]; then
-            wget -q -O assets/NotoSansCJKsc-Regular.otf \
+            curl -fL --retry 3 -o assets/NotoSansCJKsc-Regular.otf \
               https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf
           fi
           ls -lh assets/
 
       - name: Configure
         env:
+          DEPS_PREFIX: ${{ env.DEPS_PREFIX }}
           PKG_CONFIG_LIBDIR: ${{ env.DEPS_PREFIX }}/lib/pkgconfig
           PKG_CONFIG_PATH:   ${{ env.DEPS_PREFIX }}/lib/pkgconfig
         run: |
           cmake -S . -B build-aarch64 \
             -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake/aarch64-linux-gnu.cmake \
             -DCMAKE_PREFIX_PATH=${{ env.DEPS_PREFIX }} \
+            -DDEPS_PREFIX=${{ env.DEPS_PREFIX }} \
             -DCMAKE_BUILD_TYPE=Release
 
       - name: Build
@@ -119,8 +119,7 @@ jobs:
         run: |
           tar -czvf msrag-aarch64.tar.gz -C dist-aarch64 .
           mkdir -p dist-aarch64-bin
-          cp dist-aarch64/msrag dist-aarch64/libSDL2*.so* dist-aarch64/libmsrag.so \
-             dist-aarch64/libfreetype*.so* dist-aarch64-bin/ 2>/dev/null || true
+          cp dist-aarch64/msrag dist-aarch64/lib*.so* dist-aarch64-bin/ 2>/dev/null || true
           tar -czvf msrag-aarch64-bin.tar.gz -C dist-aarch64-bin .
 
       - uses: actions/upload-artifact@v4
