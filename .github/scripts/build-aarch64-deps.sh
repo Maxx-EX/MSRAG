@@ -23,19 +23,15 @@ fetch() {
     local out="$1"
     shift
     local urls=("$@")
-    
     for url in "${urls[@]}"; do
         echo ">>> 尝试下载: $url"
         if curl -fL --retry 3 --retry-delay 2 --connect-timeout 15 -o "$out" "$url"; then
-            echo ">>> 成功: $url"
             return 0
         fi
-        # 如果是 GitHub 链接，尝试 ghproxy 镜像
         if [[ "$url" == *"github.com"* ]]; then
             local proxy_url="https://ghproxy.net/$url"
-            echo ">>> 尝试加速镜像: $proxy_url"
+            echo ">>> 尝试镜像: $proxy_url"
             if curl -fL --retry 3 --connect-timeout 15 -o "$out" "$proxy_url"; then
-                echo ">>> 镜像成功"
                 return 0
             fi
         fi
@@ -50,7 +46,7 @@ extract_and_cd() {
     cd "$dir_name"
 }
 
-# ---------- zlib ----------
+# ---------- zlib (SDL2 可能用到) ----------
 fetch zlib.tar.gz \
     https://github.com/madler/zlib/releases/download/v1.3.1/zlib-1.3.1.tar.gz
 extract_and_cd zlib.tar.gz
@@ -59,28 +55,16 @@ make
 make install
 cd "$BUILD_DIR"
 
-# ---------- libpng ----------
-fetch libpng.tar.gz \
-    https://github.com/pnggroup/libpng/archive/refs/tags/v1.6.43.tar.gz
-extract_and_cd libpng.tar.gz
-./configure --host=aarch64-linux-gnu --prefix="$PREFIX" \
-  --disable-shared --enable-static \
-  CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib"
-make
-make install
-cd "$BUILD_DIR"
-
-# ---------- freetype (使用官方发布包，避开 git 依赖) ----------
+# ---------- freetype (彻底禁用 zlib 和 png 防止链接错误) ----------
 fetch freetype.tar.xz \
     https://download.savannah.gnu.org/releases/freetype/freetype-2.13.2.tar.xz \
     https://mirrors.tuna.tsinghua.edu.cn/gnu/freetype/freetype-2.13.2.tar.xz \
     https://mirrors.ustc.edu.cn/gnu/freetype/freetype-2.13.2.tar.xz
 extract_and_cd freetype.tar.xz
-# 禁用版本检查，防止某些非 git 目录报错
 export FREETYPE_VERSION=2.13.2
 ./configure --host=aarch64-linux-gnu --prefix="$PREFIX" \
   --disable-shared --enable-static \
-  --with-zlib=yes --with-png=yes --with-harfbuzz=no \
+  --with-zlib=no --with-png=no --with-harfbuzz=no \
   CPPFLAGS="-I$PREFIX/include" LDFLAGS="-L$PREFIX/lib"
 make
 make install
@@ -112,7 +96,8 @@ cmake -S . -B build \
   -DCMAKE_INSTALL_PREFIX="$PREFIX" \
   -DCMAKE_PREFIX_PATH="$PREFIX" \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_DISABLE_FIND_PACKAGE_HarfBuzz=TRUE
+  -DCMAKE_DISABLE_FIND_PACKAGE_HarfBuzz=TRUE \
+  -DCMAKE_SHARED_LINKER_FLAGS="-L$PREFIX/lib -lz"
 cmake --build build
 cmake --install build
 
