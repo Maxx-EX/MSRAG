@@ -6,77 +6,126 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ---------- x86_64 原生 ----------
+  # ---------------- x86_64 ----------------
   build-x86_64:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
       - name: Install deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential libsdl2-dev libsdl2-ttf-dev \
+          sudo apt-get install -y cmake build-essential pkg-config \
+            libsdl2-dev libsdl2-ttf-dev \
             libfreetype6-dev libharfbuzz-dev zlib1g-dev libpng-dev
+
+      - name: Fetch full CJK font
+        run: |
+          mkdir -p assets
+          if [ ! -s assets/NotoSansCJKsc-Regular.otf ]; then
+            wget -q -O assets/NotoSansCJKsc-Regular.otf \
+              https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf
+          fi
+          ls -lh assets/
+
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
       - name: Build
         run: cmake --build build -j$(nproc)
+
       - name: Install to dist-x86_64
         run: cmake --install build --prefix dist-x86_64
+
+      - name: Bundle SDL2 runtime .so
+        run: |
+          SKIP="libc.so|libm.so|libpthread.so|libdl.so|librt.so|ld-linux"
+          ldd dist-x86_64/msrag dist-x86_64/libmsrag.so | awk '/=>/ {print $3}' \
+            | sort -u | while read -r so; do
+              [ -z "$so" ] && continue
+              echo "$so" | grep -qE "$SKIP" && continue
+              cp -L "$so" dist-x86_64/ 2>/dev/null || true
+            done
+          ls -lh dist-x86_64/
+
       - name: Package x86_64
         run: |
           tar -czvf msrag-x86_64.tar.gz -C dist-x86_64 .
-          mkdir -p dist-x86_64-bin && cp dist-x86_64/msrag dist-x86_64-bin/
-          tar -czvf msrag-x86_64-bin-static.tar.gz -C dist-x86_64-bin .
+          mkdir -p dist-x86_64-bin
+          cp dist-x86_64/msrag dist-x86_64/libSDL2*.so* dist-x86_64/libmsrag.so \
+             dist-x86_64/libfreetype*.so* dist-x86_64/libpng*.so* dist-x86_64/libz*.so* \
+             dist-x86_64-bin/ 2>/dev/null || true
+          tar -czvf msrag-x86_64-bin.tar.gz -C dist-x86_64-bin .
+
       - uses: actions/upload-artifact@v4
         with:
           name: msrag-x86_64
           path: |
             msrag-x86_64.tar.gz
-            msrag-x86_64-bin-static.tar.gz
+            msrag-x86_64-bin.tar.gz
 
-  # ---------- aarch64 交叉编译（Termux 原生） ----------
+  # ---------------- aarch64 ----------------
   build-aarch64:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
+
       - name: Install cross toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake build-essential \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu \
-            wget xz-utils
-      - name: Build aarch64 dependencies (SDL2, SDL2_ttf, freetype...)
+          sudo apt-get install -y cmake build-essential pkg-config \
+            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu wget xz-utils
+
+      - name: Build aarch64 dependencies
+        env:
+          DEPS_PREFIX: ${{ runner.temp }}/aarch64-deps
         run: |
-          mkdir -p /workspace
-          cp -r ${{ github.workspace }}/* /workspace/ 2>/dev/null || true
-          cd /workspace
-          bash .github/scripts/build-aarch64-deps.sh
-      - name: Configure MSRAG for aarch64
+          echo "DEPS_PREFIX=$DEPS_PREFIX" >> $GITHUB_ENV
+          bash .github/scripts/build-aarch64-deps.sh "${{ github.workspace }}"
+
+      - name: Fetch full CJK font
+        run: |
+          mkdir -p assets
+          if [ ! -s assets/NotoSansCJKsc-Regular.otf ]; then
+            wget -q -O assets/NotoSansCJKsc-Regular.otf \
+              https://github.com/notofonts/noto-cjk/raw/main/Sans/OTF/SimplifiedChinese/NotoSansCJKsc-Regular.otf
+          fi
+          ls -lh assets/
+
+      - name: Configure
+        env:
+          PKG_CONFIG_LIBDIR: ${{ env.DEPS_PREFIX }}/lib/pkgconfig
+          PKG_CONFIG_PATH:   ${{ env.DEPS_PREFIX }}/lib/pkgconfig
         run: |
           cmake -S . -B build-aarch64 \
             -DCMAKE_TOOLCHAIN_FILE=${{ github.workspace }}/cmake/aarch64-linux-gnu.cmake \
-            -DCMAKE_PREFIX_PATH=/opt/aarch64-deps \
+            -DCMAKE_PREFIX_PATH=${{ env.DEPS_PREFIX }} \
             -DCMAKE_BUILD_TYPE=Release
+
       - name: Build
         run: cmake --build build-aarch64 -j$(nproc)
-      - name: Install bin + so
+
+      - name: Install to dist-aarch64
         run: cmake --install build-aarch64 --prefix dist-aarch64
-      - name: Bundle aarch64 SDL2 .so into dynamic package
+
+      - name: Bundle aarch64 SDL2 runtime .so
         run: |
-          # 将交叉编译的 SDL2 / SDL2_ttf 动态库复制到 dist-aarch64
-          cp -a /opt/aarch64-deps/lib/libSDL2*.so* dist-aarch64/ 2>/dev/null || true
-          cp -a /opt/aarch64-deps/lib/libSDL2_ttf*.so* dist-aarch64/ 2>/dev/null || true
-          # 如果 SDL2_ttf 静态链接了 freetype，则不需要 freetype .so；
-          # 若存在，一并复制
-          cp -a /opt/aarch64-deps/lib/libfreetype*.so* dist-aarch64/ 2>/dev/null || true
+          cp -a ${{ env.DEPS_PREFIX }}/lib/libSDL2*.so* dist-aarch64/ 2>/dev/null || true
+          cp -a ${{ env.DEPS_PREFIX }}/lib/libSDL2_ttf*.so* dist-aarch64/ 2>/dev/null || true
+          cp -a ${{ env.DEPS_PREFIX }}/lib/libfreetype*.so* dist-aarch64/ 2>/dev/null || true
+          ls -lh dist-aarch64/
+
       - name: Package aarch64
         run: |
           tar -czvf msrag-aarch64.tar.gz -C dist-aarch64 .
-          mkdir -p dist-aarch64-bin && cp dist-aarch64/msrag dist-aarch64-bin/
-          tar -czvf msrag-aarch64-bin-static.tar.gz -C dist-aarch64-bin .
+          mkdir -p dist-aarch64-bin
+          cp dist-aarch64/msrag dist-aarch64/libSDL2*.so* dist-aarch64/libmsrag.so \
+             dist-aarch64/libfreetype*.so* dist-aarch64-bin/ 2>/dev/null || true
+          tar -czvf msrag-aarch64-bin.tar.gz -C dist-aarch64-bin .
+
       - uses: actions/upload-artifact@v4
         with:
           name: msrag-aarch64
           path: |
             msrag-aarch64.tar.gz
-            msrag-aarch64-bin-static.tar.gz
+            msrag-aarch64-bin.tar.gz
